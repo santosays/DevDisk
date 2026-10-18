@@ -293,8 +293,12 @@ final class Scanner {
         for line in out.split(separator: "\n") {
             guard let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
                   let type = obj["Type"] as? String, let (label, cmd, effect) = map[type],
-                  let bytes = parseDockerSize(obj["Size"] as? String ?? ""), bytes >= Self.minBytes else { continue }
-            let reclaim = (obj["Reclaimable"] as? String).map { " Docker reports \($0) reclaimable." } ?? ""
+                  let total = parseDockerSize(obj["Size"] as? String ?? "") else { continue }
+            // prune only frees what nothing uses ("1.2GB (45%)"), so that's the size to show.
+            let reclaimText = (obj["Reclaimable"] as? String ?? "").split(separator: " ").first.map(String.init) ?? ""
+            let bytes = parseDockerSize(reclaimText) ?? total
+            guard bytes >= Self.minBytes else { continue }
+            let reclaim = bytes < total ? " The rest of the \(fmtBytes(total)) is in use and stays." : ""
             let id = "docker:" + type
             var item = ScanItem(id: id, path: id, displayPath: "Docker · \(type)", bytes: bytes, group: .review,
                                 kind: .docker, label: label, effect: effect + reclaim, command: cmd)

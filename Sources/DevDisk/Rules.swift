@@ -25,7 +25,7 @@ struct GlobalRule {
     let kind: Kind
     let group: Group
     let effect: String
-    /// Tool's own clean command. nil = no such command; the user removes it themself.
+    /// Tool's own clean command, only when it removes the whole folder. nil = Move to Trash.
     var command: String? = nil
     /// When set, each child folder becomes its own item and this builds its command from the child name.
     var perChild: ((String) -> (label: String, command: String?))? = nil
@@ -58,8 +58,7 @@ enum Rules {
               effect: "Yarn's package cache. Re-downloaded on the next install.",
               command: "yarn cache clean"),
         .init(path: ".yarn/berry/cache", label: "Yarn Berry cache", kind: .javascript, group: .safe,
-              effect: "Yarn 2+ global cache. Re-downloaded on the next install.",
-              command: "yarn cache clean --all"),
+              effect: "Yarn 2+ global cache. Re-downloaded on the next install. Yarn's clean command only works inside a Yarn 2+ project, so DevDisk moves this to the Trash."),
         .init(path: "Library/pnpm/store", label: "pnpm store", kind: .javascript, group: .safe,
               effect: "pnpm removes packages no project references. Packages still in use stay.",
               command: "pnpm store prune"),
@@ -87,23 +86,28 @@ enum Rules {
         .init(path: ".cache/uv", label: "uv cache", kind: .python, group: .safe,
               effect: "uv's package cache. Re-downloaded on the next sync (uv is fast at this).",
               command: "uv cache clean"),
-        .init(path: "Library/Caches/pypoetry", label: "Poetry cache", kind: .python, group: .safe,
-              effect: "Poetry's PyPI cache. Re-downloaded on the next install.",
+        .init(path: "Library/Caches/pypoetry/cache", label: "Poetry cache", kind: .python, group: .safe,
+              effect: "Poetry's PyPI cache. Re-downloaded on the next install. Caches for private package sources stay.",
               command: "poetry cache clear PyPI --all -n"),
+        .init(path: "Library/Caches/pypoetry/artifacts", label: "Poetry artifacts", kind: .python, group: .safe,
+              effect: "Downloaded wheels and sdists. Re-downloaded on the next install."),
+        .init(path: "Library/Caches/pypoetry/virtualenvs", label: "Poetry virtualenvs", kind: .python, group: .safe,
+              effect: "This project's Poetry environment. Run `poetry install` in the project to recreate it.",
+              perChild: { v in ("Poetry env · \(v)", nil) }),
         .init(path: ".cache/pre-commit", label: "pre-commit envs", kind: .python, group: .safe,
               effect: "Hook environments. Rebuilt the next time a hook runs.",
               command: "pre-commit clean"),
         .init(path: ".wdm", label: "webdriver-manager drivers", kind: .python, group: .safe,
               effect: "Downloaded browser drivers. Fetched again the next time they're needed."),
         .init(path: "miniconda3/pkgs", label: "Miniconda package cache", kind: .python, group: .safe,
-              effect: "Unused conda package tarballs and caches. Environments keep working.",
-              command: "conda clean --all -y"),
+              effect: "Unused conda package tarballs and caches. Packages your environments use stay, so this frees less than the size shown.",
+              command: "\"$HOME/miniconda3/bin/conda\" clean --all -y"),
         .init(path: "miniforge3/pkgs", label: "Miniforge package cache", kind: .python, group: .safe,
-              effect: "Unused conda package tarballs and caches. Environments keep working.",
-              command: "conda clean --all -y"),
+              effect: "Unused conda package tarballs and caches. Packages your environments use stay, so this frees less than the size shown.",
+              command: "\"$HOME/miniforge3/bin/conda\" clean --all -y"),
         .init(path: "anaconda3/pkgs", label: "Anaconda package cache", kind: .python, group: .safe,
-              effect: "Unused conda package tarballs and caches. Environments keep working.",
-              command: "conda clean --all -y"),
+              effect: "Unused conda package tarballs and caches. Packages your environments use stay, so this frees less than the size shown.",
+              command: "\"$HOME/anaconda3/bin/conda\" clean --all -y"),
         .init(path: ".pyenv/versions", label: "pyenv versions", kind: .python, group: .review,
               effect: "This Python and every package installed into it are removed. Virtualenvs built on it break.",
               perChild: { v in ("Python \(v) (pyenv)", "pyenv uninstall -f \(shq(v))") }),
@@ -123,8 +127,7 @@ enum Rules {
         .init(path: "Library/Caches/com.apple.dt.Xcode", label: "Xcode cache", kind: .apple, group: .safe,
               effect: "Xcode's general cache. Rebuilt as needed."),
         .init(path: "Library/Caches/org.swift.swiftpm", label: "SwiftPM cache", kind: .apple, group: .safe,
-              effect: "Cached package checkouts. Re-fetched on the next resolve.",
-              command: "swift package purge-cache"),
+              effect: "Cached package checkouts, manifests and binary artifacts (prebuilt XCFrameworks). Re-downloaded on the next resolve. `swift package purge-cache` leaves the artifacts behind, so DevDisk moves the whole cache to the Trash."),
         .init(path: "Library/Caches/CocoaPods", label: "CocoaPods cache", kind: .apple, group: .safe,
               effect: "Downloaded pods. Re-downloaded on the next `pod install`.",
               command: "pod cache clean --all"),
@@ -144,7 +147,7 @@ enum Rules {
         .init(path: ".m2/repository", label: "Maven repository", kind: .jvm, group: .safe,
               effect: "Local Maven artifacts. Re-downloaded on the next build. Anything you `mvn install`ed locally is lost."),
         .init(path: ".pub-cache", label: "Dart/Flutter pub cache", kind: .jvm, group: .safe,
-              effect: "Downloaded Dart packages. Run `flutter pub get` in each project afterwards.",
+              effect: "Downloaded Dart packages and globally activated tools. Run `flutter pub get` in each project, and `dart pub global activate` again for any tools you use.",
               command: "dart pub cache clean --force"),
         .init(path: ".android/cache", label: "Android cache", kind: .jvm, group: .safe,
               effect: "Android tools cache. Rebuilt as needed."),
@@ -155,7 +158,7 @@ enum Rules {
 
         // Toolchains & editors
         .init(path: "Library/Caches/Homebrew", label: "Homebrew cache", kind: .toolchains, group: .safe,
-              effect: "Downloaded bottles and old versions. Installed formulae are untouched.",
+              effect: "Downloaded bottles and old versions. Installed formulae are untouched. Homebrew keeps its package index (a few dozen MB).",
               command: "brew cleanup --prune=all"),
         .init(path: ".cargo/registry", label: "Cargo registry", kind: .toolchains, group: .safe,
               effect: "Downloaded crates. Re-fetched on the next cargo build."),
@@ -171,7 +174,7 @@ enum Rules {
               effect: "The downloaded gem index. `gem` fetches it again on the next install or search.",
               command: "gem sources --clear-all"),
         .init(path: ".gem/ruby", label: "RubyGems (user)", kind: .toolchains, group: .safe,
-              effect: "Removes old versions of gems installed in ~/.gem. The newest version of each stays.",
+              effect: "Removes old versions of gems installed in ~/.gem for the current Ruby. The newest version of each stays.",
               command: "gem cleanup --user-install"),
         .init(path: "Library/Caches/JetBrains", label: "JetBrains caches", kind: .toolchains, group: .safe,
               effect: "IDE indexes. Rebuilt the next time you open a project, which is slower."),
@@ -228,7 +231,7 @@ enum Rules {
 
         // Docker & VMs: always review
         .init(path: ".colima", label: "Colima VM", kind: .docker, group: .review,
-              effect: "Deletes the Colima VM and every image, container and volume inside it.",
+              effect: "Deletes the default Colima VM and every image, container and volume inside it. Other profiles stay (`colima delete -p <name>`).",
               command: "colima delete --force"),
         .init(path: ".lima", label: "Lima VMs", kind: .docker, group: .review,
               effect: "Lima virtual machines and their disks. Delete each one with `limactl delete <name>`."),
@@ -269,9 +272,14 @@ enum Rules {
               label: "Gradle build/", kind: .jvm,
               effect: "Gradle build output. Rebuilt on the next build.",
               command: { _, p in
-                  FileManager.default.fileExists(atPath: p + "/gradlew")
-                      ? "\(shq(p + "/gradlew")) -p \(shq(p)) clean"
-                      : "gradle -p \(shq(p)) clean"
+                  var dir = p
+                  while dir.hasPrefix(home + "/") {
+                      if FileManager.default.isExecutableFile(atPath: dir + "/gradlew") {
+                          return "\(shq(dir + "/gradlew")) -p \(shq(p)) clean"
+                      }
+                      dir = (dir as NSString).deletingLastPathComponent
+                  }
+                  return "gradle -p \(shq(p)) clean"
               }),
         .init(names: [".gradle"], parentMarkers: ["build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"],
               label: "Gradle project cache", kind: .jvm,
