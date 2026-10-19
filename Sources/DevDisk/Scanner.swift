@@ -11,6 +11,8 @@ struct ScanItem: Codable {
     var label: String
     var effect: String
     var command: String?
+    /// Folder whose shrinkage counts as freed, when the item isn't a folder of its own (Ollama models share blobs/).
+    var measure: String? = nil
     var prevBytes: Int64?
     var grew = false
     var isNew = false
@@ -51,6 +53,7 @@ final class Scanner {
         let start = Date()
         let history = History.load()
         var candidates: [(path: String, label: String, kind: Kind, group: Group, effect: String, command: String?)] = []
+        var extra: [ScanItem] = []   // items sized by their tool rather than by a folder
 
         // 1. Fixed locations: caches, toolchains, models, sessions, VMs.
         for rule in Rules.globals {
@@ -61,7 +64,20 @@ final class Scanner {
                     let (label, cmd) = perChild(child)
                     candidates.append((full + "/" + child, label, rule.kind, rule.group, rule.effect, cmd))
                 }
+            } else if rule.path == ".ollama/models", let models = ollamaList(), !models.isEmpty {
+                // One item per model. Sizes come from `ollama list`; the blobs are shared, so there's no folder per model.
+                for m in models where m.bytes >= Self.minBytes {
+                    let id = "ollama:" + m.name
+                    var item = ScanItem(id: id, path: id, displayPath: tilde(full) + " · " + m.name, bytes: m.bytes,
+                                        group: rule.group, kind: rule.kind, label: "Ollama · " + m.name,
+                                        effect: "This model is deleted. `ollama pull \(m.name)` downloads it again. Layers it shares with other models stay, so it can free less than shown.",
+                                        command: "ollama rm \(shq(m.name))")
+                    item.measure = full + "/blobs"
+                    extra.append(item)
+                }
             } else if rule.path == ".ollama/models" {
+                // Ollama isn't running (or isn't installed): one item, names from the manifest folder layout.
+                notes.append("Start Ollama to see the size of each model.")
                 let models = ollamaModels(full)
                 let cmd = models.isEmpty ? nil : models.map { "ollama rm \(shq($0))" }.joined(separator: "\n")
                 let effect = models.isEmpty ? rule.effect : rule.effect + " Models: " + models.joined(separator: ", ") + "."
@@ -139,7 +155,17 @@ final class Scanner {
         }
 
         // 4. Docker Desktop keeps its disk in an app container that would trigger a prompt; ask its CLI instead.
-        items += dockerItems(history: history)
+        extra += dockerItems()
+        for var item in extra {
+            if let prev = history.latest[item.id] {
+                item.prevBytes = prev
+                let delta = item.bytes - prev
+                item.grew = delta >= 10_000_000 && Double(delta) >= Double(prev) * 0.02
+            } else if history.previousScanAt != nil {
+                item.isNew = true
+            }
+            items.append(item)
+        }
 
         items.sort { $0.bytes > $1.bytes }
         let currentPaths = Set(items.map(\.path))
@@ -253,6 +279,20 @@ final class Scanner {
     }
 
     /// Model names come from the manifest folder layout (host/namespace/model/tag), not from file contents.
+    /// Installed models and their sizes from `ollama list` (needs the Ollama app or `ollama serve` running).
+    private func ollamaList() -> [(name: String, bytes: Int64)]? {
+        let candidates = ["/usr/local/bin/ollama", "/opt/homebrew/bin/ollama", "/Applications/Ollama.app/Contents/Resources/ollama"]
+        guard let bin = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else { return nil }
+        report("Asking Ollama for its models…", 0, force: true)
+        guard let out = runTool(bin, ["list"], timeout: 10) else { return nil }
+        // NAME  ID  SIZE  MODIFIED, separated by runs of spaces; SIZE is like "6.6 GB" or "815 MB".
+        return out.split(separator: "\n").dropFirst().compactMap { line in
+            let cols = line.components(separatedBy: "  ").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            guard cols.count >= 3, let bytes = parseDockerSize(cols[2].replacingOccurrences(of: " ", with: "")) else { return nil }
+            return (cols[0], bytes)
+        }
+    }
+
     private func ollamaModels(_ modelsDir: String) -> [String] {
         let manifests = modelsDir + "/manifests"
         var names: [String] = []
@@ -270,7 +310,7 @@ final class Scanner {
         return names.sorted()
     }
 
-    private func dockerItems(history: History.Snapshot) -> [ScanItem] {
+    private func dockerItems() -> [ScanItem] {
         let candidates = ["/usr/local/bin/docker", "/opt/homebrew/bin/docker", home + "/.docker/bin/docker",
                           "/Applications/Docker.app/Contents/Resources/bin/docker"]
         let hasDesktop = FileManager.default.fileExists(atPath: "/Applications/Docker.app")
@@ -300,13 +340,8 @@ final class Scanner {
             guard bytes >= Self.minBytes else { continue }
             let reclaim = bytes < total ? " The rest of the \(fmtBytes(total)) is in use and stays." : ""
             let id = "docker:" + type
-            var item = ScanItem(id: id, path: id, displayPath: "Docker · \(type)", bytes: bytes, group: .review,
-                                kind: .docker, label: label, effect: effect + reclaim, command: cmd)
-            if let prev = history.latest[id] {
-                item.prevBytes = prev
-                item.grew = bytes - prev >= 10_000_000
-            }
-            items.append(item)
+            items.append(ScanItem(id: id, path: id, displayPath: "Docker · \(type)", bytes: bytes, group: .review,
+                                  kind: .docker, label: label, effect: effect + reclaim, command: cmd))
         }
         return items
     }

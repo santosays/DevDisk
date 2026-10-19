@@ -4,3 +4,5 @@ dist/
 *.xcodeproj/
 xcuserdata/
 .DS_Store
+.vscode/*
+!.vscode/tasks.json

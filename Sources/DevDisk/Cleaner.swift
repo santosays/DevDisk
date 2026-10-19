@@ -46,6 +46,7 @@ final class Cleaner {
             write("\n==> \(item.label) (\(fmtBytes(item.bytes)))\n    \(item.displayPath)\n")
 
             if let command = item.command {
+                let measuredBefore = item.measure.map { Scanner().allocatedSize($0) }
                 let cmds = command.split(separator: "\n").map(String.init).filter { !done.contains($0) }
                 var status = "done", message = ""
                 if cmds.isEmpty { message = "Already handled by an earlier step" }
@@ -58,9 +59,10 @@ final class Cleaner {
                     if code != 0 { status = "failed"; message = "Exited with code \(code)"; break }
                 }
                 var gained: Int64 = 0
-                if item.path.hasPrefix("/") {
-                    let after = FileManager.default.fileExists(atPath: item.path) ? Scanner().allocatedSize(item.path) : 0
-                    gained = max(0, item.bytes - after)
+                let measured = item.measure ?? (item.path.hasPrefix("/") ? item.path : nil)
+                if let measured {
+                    let after = FileManager.default.fileExists(atPath: measured) ? Scanner().allocatedSize(measured) : 0
+                    gained = max(0, (measuredBefore ?? item.bytes) - after)
                     freed += gained
                     // The tool succeeded but left the folder as it was: say so instead of a bare "done".
                     if status == "done" && !cmds.isEmpty && gained < 1_000_000 {
