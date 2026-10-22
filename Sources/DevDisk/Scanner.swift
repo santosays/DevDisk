@@ -13,6 +13,10 @@ struct ScanItem: Codable {
     var command: String?
     /// Folder whose shrinkage counts as freed, when the item isn't a folder of its own (Ollama models share blobs/).
     var measure: String? = nil
+    /// Owned by macOS: can't be cleaned, only turned off in System Settings.
+    var managed = false
+    /// macOS blocks reading the folder, so `bytes` is 0 and the size is unknown.
+    var sizeHidden = false
     var prevBytes: Int64?
     var grew = false
     var isNew = false
@@ -154,14 +158,17 @@ final class Scanner {
             items.append(item)
         }
 
-        // 4. Docker Desktop keeps its disk in an app container that would trigger a prompt; ask its CLI instead.
+        // 4. Apple Intelligence: shown for information, never cleaned.
+        extra += appleIntelligenceItems()
+
+        // 5. Docker Desktop keeps its disk in an app container that would trigger a prompt; ask its CLI instead.
         extra += dockerItems()
         for var item in extra {
             if let prev = history.latest[item.id] {
                 item.prevBytes = prev
                 let delta = item.bytes - prev
                 item.grew = delta >= 10_000_000 && Double(delta) >= Double(prev) * 0.02
-            } else if history.previousScanAt != nil {
+            } else if history.previousScanAt != nil && !item.sizeHidden {
                 item.isNew = true
             }
             items.append(item)
@@ -172,7 +179,7 @@ final class Scanner {
         let gone = history.lastScanItems.filter { !currentPaths.contains($0.path) }
 
         let scannedAt = ISO8601DateFormatter().string(from: Date())
-        if recordHistory { History.append(items: items, scannedAt: scannedAt) }
+        if recordHistory { History.append(items: items.filter { !$0.sizeHidden }, scannedAt: scannedAt) }
 
         return ScanResult(scannedAt: scannedAt, previousScanAt: history.previousScanAt,
                           durationMs: Int(Date().timeIntervalSince(start) * 1000), home: home,
@@ -308,6 +315,24 @@ final class Scanner {
             }
         }
         return names.sorted()
+    }
+
+    private func appleIntelligenceItems() -> [ScanItem] {
+        var items: [ScanItem] = []
+        for (folder, label) in Rules.appleIntelligence {
+            let path = Rules.assetsV2 + "/com_apple_MobileAsset_UAF_" + folder
+            guard isRealDirectory(path) else { continue }
+            // Listing a data vault fails with EPERM without any prompt; that's how we tell it apart.
+            let readable = (try? FileManager.default.contentsOfDirectory(atPath: path)) != nil
+            let bytes = readable ? allocatedSize(path) : 0
+            if readable && bytes < Self.minBytes { continue }
+            var item = ScanItem(id: path, path: path, displayPath: path, bytes: bytes, group: .review, kind: .intelligence,
+                                label: "Apple Intelligence · " + label, effect: Rules.appleIntelligenceEffect, command: nil)
+            item.managed = true
+            item.sizeHidden = !readable
+            items.append(item)
+        }
+        return items
     }
 
     private func dockerItems() -> [ScanItem] {

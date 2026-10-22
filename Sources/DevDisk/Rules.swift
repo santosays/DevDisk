@@ -8,7 +8,7 @@ enum Group: String, Codable {
 
 /// Kinds map 1:1 to the categorical palette slots in the UI, in this fixed order.
 enum Kind: String, Codable, CaseIterable {
-    case javascript, python, apple, jvm, models, toolchains, sessions, docker
+    case javascript, python, apple, jvm, models, toolchains, sessions, docker, intelligence
 }
 
 /// Single-quote a string for zsh/bash.
@@ -305,6 +305,26 @@ enum Rules {
         .init(names: ["_build", "deps"], parentMarkers: ["mix.exs"], label: "Elixir build/deps", kind: .toolchains,
               effect: "Compiled code or fetched deps. Restored by `mix deps.get && mix compile`."),
     ]
+
+    /// Apple Intelligence assets that macOS downloads into AssetsV2, by folder (minus `com_apple_MobileAsset_UAF_`).
+    /// macOS owns them and puts them back if deleted; turning Apple Intelligence off is the only way to remove them.
+    /// The FM and IF folders are SIP data vaults: even listing them fails, so their size can't be known.
+    static let assetsV2 = "/System/Library/AssetsV2"
+    static let appleIntelligence: [(folder: String, label: String)] = [
+        ("FM_GenerativeModels", "Language models"),
+        ("FM_CodeLM", "Code model"),
+        ("FM_Visual", "Image models"),
+        ("FM_Overrides", "Model adapters"),
+        ("IF_Planner", "Siri planner"),
+        ("IF_PlannerOverrides", "Siri planner adapters"),
+        ("Photos_MagicCleanup", "Photos Clean Up"),
+        ("SafariBrowsingAssistant", "Safari summaries"),
+        ("Shortcuts_Generator", "Shortcuts generator"),
+        ("Siri_AnswerSynthesis", "Siri answers"),
+        ("SummarizationKitConfiguration", "Summaries"),
+        ("Handwriting_Synthesis", "Handwriting"),
+    ]
+    static let appleIntelligenceEffect = "Part of Apple Intelligence. macOS manages these files and downloads them again if they're deleted. Turn off Apple Intelligence in System Settings › Apple Intelligence & Siri and macOS removes them in the background."
 
     /// Top-level folders in ~ the project walk never enters. Library is covered by the fixed rules above;
     /// Pictures holds the Photos library; Music and Movies are media folders.

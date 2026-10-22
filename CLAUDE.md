@@ -25,7 +25,9 @@ after a rebuild. The Web files are copied into the bundle at build time.
   Swift → page: `App.receive(msg)`.
 - `Sources/DevDisk/Rules.swift`: everything the scan looks for. `Rules.globals` are fixed paths under ~
   and `Rules.projectRules` are folders found inside projects (gated by marker files). Also
-  `skipTopLevel`, `protectedFolders` and `cloudPrefixes`.
+  `skipTopLevel`, `protectedFolders` and `cloudPrefixes`. `appleIntelligence` lists asset folders under
+  `/System/Library/AssetsV2`: shown as `managed` items that can't be ticked or cleaned (turn the feature off
+  instead). The FM/IF folders are SIP data vaults that refuse even a listing, so they show `sizeHidden`.
 - `Sources/DevDisk/Scanner.swift`: read-only scan (`fts_open`, `st_blocks`, no symlinks, no other
   volumes, hard links counted once). Special cases: per-model Ollama, per-repo Hugging Face,
   per-device simulators (via `simctl list -j`), Docker via `docker system df`.
@@ -55,6 +57,7 @@ after a rebuild. The Web files are copied into the bundle at build time.
   Commands must be non-interactive (`-y`, `--force`, `-n`).
 - **Name the binary when installs can coexist** (e.g. `"$HOME/miniconda3/bin/conda"`). The cleaner
   skips a command string it has already run.
+- `managed` items never reach the cleaner: the page won't tick them and `startCleanup` drops them.
 - Sessions, models and Docker always go in `review`. Anything with user data goes in `review`.
 - Each rule's `effect` says what happens if the folder is deleted, in one or two plain sentences.
   Mention partial cleanups. Use backticks for commands (the UI renders them as code).

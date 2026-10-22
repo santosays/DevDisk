@@ -10,6 +10,7 @@ const KINDS = [
   ['toolchains', 'Toolchains & editors'],
   ['sessions', 'AI sessions'],
   ['docker', 'Docker & VMs'],
+  ['intelligence', 'Apple Intelligence'],
 ];
 const KIND_NAME = Object.fromEntries(KINDS);
 const GROUP_NAME = { safe: 'Safe to remove', review: 'Let me review first' };
@@ -35,6 +36,7 @@ const rich = (s) => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>');
 const when = (iso) => new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 const delta = (it) => (it.prevBytes != null ? it.bytes - it.prevBytes : 0);
 const sum = (arr, f = (x) => x) => arr.reduce((a, x) => a + f(x), 0);
+const size = (it) => (it.sizeHidden ? 'Size hidden by macOS' : fmt(it.bytes));
 
 function countUp(el, to, format, dur = 900) {
   const t0 = performance.now();
@@ -180,7 +182,7 @@ function renderTreemap() {
   const el = $('#treemap');
   const W = el.clientWidth, H = el.clientHeight, HEAD = 30, GAP = 14;
   const groups = ['safe', 'review'].map((g) => {
-    const items = state.items.filter((i) => i.group === g).sort((a, b) => b.bytes - a.bytes);
+    const items = state.items.filter((i) => i.group === g && i.bytes > 0).sort((a, b) => b.bytes - a.bytes);
     return { g, items, total: sum(items, (i) => i.bytes) };
   });
   const all = sum(groups, (g) => g.total);
@@ -259,7 +261,7 @@ function barRow(it, value, max, label, valText, up) {
 }
 
 function renderBars() {
-  const top = [...state.items].sort((a, b) => b.bytes - a.bytes).slice(0, 10);
+  const top = state.items.filter((i) => i.bytes > 0).sort((a, b) => b.bytes - a.bytes).slice(0, 10);
   const max = top[0]?.bytes || 1;
   $('#bars').innerHTML = top.map((it) => barRow(it, it.bytes, max, it.label, fmt(it.bytes))).join('') || '<p class="empty-note">Nothing found.</p>';
 }
@@ -292,7 +294,7 @@ function renderList() {
     if (state.group !== 'all' && state.group !== g) continue;
     const items = state.items.filter((i) => i.group === g && match(i)).sort((a, b) => b.bytes - a.bytes);
     if (!items.length) continue;
-    const allOn = items.every((i) => state.selected.has(i.id));
+    const allOn = items.filter((i) => !i.managed).every((i) => state.selected.has(i.id));
     html += `<div class="grp-title"><i class="dot ${g}"></i>${GROUP_NAME[g]} <small>${fmt(sum(items, (i) => i.bytes))} · ${items.length}</small>
       <button class="ghost" data-tickall="${g}">${allOn ? 'Untick all' : 'Tick all'}</button></div>`;
     for (const it of items) html += rowHTML(it);
@@ -309,6 +311,7 @@ function trashCmd(it) {
 
 // What removal does and whether it can be undone.
 function howHTML(it) {
+  if (it.managed) return "<span>Managed by macOS. DevDisk can't remove it.</span>";
   return it.command
     ? `<span>Runs</span><code>${esc(it.command)}</code><span class="undo no">Can't be undone: the tool deletes it directly, not via the Trash</span>`
     : `<span>Moves to Trash, same as</span><code>${esc(trashCmd(it))}</code><span class="undo yes">↩ Undoable: drag it out of the Trash until you empty it</span>`;
@@ -323,13 +326,13 @@ function rowHTML(it) {
   ].join('');
   const how = howHTML(it);
   const was = it.prevBytes != null && d !== 0 ? `<small>was ${fmt(it.prevBytes)}</small>` : '';
-  return `<div class="row" data-i="${it.i}">
+  return `<div class="row${it.managed ? ' managed' : ''}" data-i="${it.i}">
     <input type="checkbox" ${state.selected.has(it.id) ? 'checked' : ''} aria-label="Select ${esc(it.label)}">
     <div><div class="ttl">${esc(it.label)} ${badges}</div>
       <div class="path" ${it.path.startsWith('/') ? `title="Reveal in Finder"` : ''}>${esc(it.displayPath)}</div>
-      <div class="eff">If deleted: ${rich(it.effect)}</div>
+      <div class="eff">${it.managed ? '' : 'If deleted: '}${rich(it.effect)}</div>
       <div class="how">${how}</div></div>
-    <div class="size">${fmt(it.bytes)}${was}</div></div>`;
+    <div class="size${it.sizeHidden ? ' hidden-size' : ''}">${size(it)}${was}</div></div>`;
 }
 
 function renderSkipped() {
@@ -341,7 +344,9 @@ function renderSkipped() {
 }
 
 // ---------- selection ----------
+// Returns false for macOS-managed items, which can't be selected.
 function toggle(id, on) {
+  if (state.items.find((i) => i.id === id)?.managed) { state.selected.delete(id); return false; }
   if (on ?? !state.selected.has(id)) state.selected.add(id); else state.selected.delete(id);
 }
 
@@ -351,7 +356,7 @@ function updateSelection() {
   $$('.row').forEach((r) => (r.querySelector('input').checked = state.selected.has(state.items[+r.dataset.i].id)));
   $$('[data-tickall]').forEach((b) => {
     const g = b.dataset.tickall;
-    const rows = $$('.row').map((r) => state.items[+r.dataset.i]).filter((i) => i.group === g);
+    const rows = $$('.row').map((r) => state.items[+r.dataset.i]).filter((i) => i.group === g && !i.managed);
     b.textContent = rows.length && rows.every((i) => state.selected.has(i.id)) ? 'Untick all' : 'Tick all';
   });
   $('#selCount').textContent = sel.length;
@@ -477,10 +482,10 @@ function itemTip(it) {
   const d = delta(it);
   return `<h5><i class="dot" style="background:${kcolor(it.kind)}"></i>${esc(it.label)}</h5>
     <div class="p">${esc(it.displayPath)}</div>
-    <div class="big">${fmt(it.bytes)} ${it.grew ? `<span class="badge up">▲ +${fmt(d)}</span>` : ''}${it.isNew ? '<span class="badge new">new</span>' : ''}</div>
+    <div class="big">${size(it)} ${it.grew ? `<span class="badge up">▲ +${fmt(d)}</span>` : ''}${it.isNew ? '<span class="badge new">new</span>' : ''}</div>
     <div class="e">${esc(GROUP_NAME[it.group])} · ${esc(KIND_NAME[it.kind])}</div>
-    <div class="e" style="margin-top:6px">If deleted: ${rich(it.effect)}</div>
-    <div class="e" style="margin-top:6px">${it.command ? `Clean with <code>${esc(it.command.split('\n')[0])}</code>${it.command.includes('\n') ? ' …' : ''} · can't be undone` : `Moves to Trash (<code>${esc(trashCmd(it))}</code>) · undoable`}</div>`;
+    <div class="e" style="margin-top:6px">${it.managed ? '' : 'If deleted: '}${rich(it.effect)}</div>
+    <div class="e" style="margin-top:6px">${it.managed ? 'Managed by macOS · turn off Apple Intelligence to remove' : it.command ? `Clean with <code>${esc(it.command.split('\n')[0])}</code>${it.command.includes('\n') ? ' …' : ''} · can't be undone` : `Moves to Trash (<code>${esc(trashCmd(it))}</code>) · undoable`}</div>`;
 }
 
 // ---------- modals ----------
@@ -511,13 +516,14 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   $('#treemap').addEventListener('click', (e) => {
     const t = e.target.closest('.tm-tile');
-    if (t) { toggle(state.items[+t.dataset.i].id); updateSelection(); }
+    if (t && toggle(state.items[+t.dataset.i].id) === false) openModal('#managedModal');
+    if (t) updateSelection();
   });
 
   $('#list').addEventListener('click', (e) => {
     const all = e.target.closest('[data-tickall]');
     if (all) {
-      const rows = $$('.row').map((r) => state.items[+r.dataset.i]).filter((i) => i.group === all.dataset.tickall);
+      const rows = $$('.row').map((r) => state.items[+r.dataset.i]).filter((i) => i.group === all.dataset.tickall && !i.managed);
       const on = !rows.every((i) => state.selected.has(i.id));
       rows.forEach((i) => toggle(i.id, on));
       return updateSelection();
@@ -526,7 +532,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!row) return;
     const it = state.items[+row.dataset.i];
     if (e.target.closest('.path')) { if (it.path.startsWith('/')) bridge({ cmd: 'reveal', path: it.path }); return; }
-    if (e.target.matches('input')) { toggle(it.id, e.target.checked); updateSelection(); }
+    if (e.target.matches('input')) {
+      if (toggle(it.id, e.target.checked) === false) openModal('#managedModal');
+      updateSelection();
+    }
   });
 
   $$('#groupSeg button').forEach((b) => b.addEventListener('click', () => {

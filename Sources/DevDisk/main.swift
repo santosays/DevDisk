@@ -100,7 +100,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     private func startCleanup(ids: [String]) {
         guard cleaner == nil, !scanning, let result = lastResult else { return }
         let byId = Dictionary(uniqueKeysWithValues: result.items.map { ($0.id, $0) })
-        let items = ids.compactMap { byId[$0] }
+        // macOS-managed items are informational; never clean them even if the page asks.
+        let items = ids.compactMap { byId[$0] }.filter { !$0.managed }
         guard !items.isEmpty else { return }
         let cleaner = Cleaner { [weak self] event in
             DispatchQueue.main.async { self?.send(event) }
